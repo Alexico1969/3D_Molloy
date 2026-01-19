@@ -74,6 +74,50 @@ const createScene = () => {
     waterMat.diffuseColor = new BABYLON.Color3(0.10, 0.35, 0.55);
     waterMat.alpha = 0.85;
 
+    // Load a GLB model
+    const loadCampusAsset = async () => {
+        const result = await BABYLON.SceneLoader.ImportMeshAsync(
+            "",                      // import all meshes
+            "./assets/models/",      // folder
+            "traffic_light_ped.glb",   // filename
+            scene
+        );
+
+        const rootMesh = result.meshes[0];
+        if (rootMesh) {
+            rootMesh.scaling.set(1.0, 1.0, 1.0);
+
+            // Define positions and rotations for 4 corners (aligned to N, S, E, W)
+            const corners = [
+                { pos: new BABYLON.Vector3(13, 0, 13), rot: Math.PI },      // NE faces South
+                { pos: new BABYLON.Vector3(-13, 0, 13), rot: Math.PI / 2 }, // NW faces East
+                { pos: new BABYLON.Vector3(-13, 0, -13), rot: 0 },          // SW faces North
+                { pos: new BABYLON.Vector3(13, 0, -13), rot: -Math.PI / 2 } // SE faces West
+            ];
+
+            // Setup the first one (NE)
+            rootMesh.position.copyFrom(corners[0].pos);
+            rootMesh.rotationQuaternion = null; // Use Euler rotation
+            rootMesh.rotation.y = corners[0].rot;
+
+            // Clone for the other 3 corners
+            for (let i = 1; i < corners.length; i++) {
+                const clone = rootMesh.instantiateHierarchy();
+                clone.position.copyFrom(corners[i].pos);
+                clone.rotationQuaternion = null;
+                clone.rotation.y = corners[i].rot;
+            }
+        }
+
+        result.meshes.forEach(m => {
+            if (!m.getBoundingInfo) return;
+            m.checkCollisions = true;
+            m.freezeWorldMatrix();
+        });
+    };
+
+    loadCampusAsset();
+
     // --- Roads: 2 streets forming an intersection ---
     // Road 1 (East-West): Goes all the way across (640 width)
     const road1 = BABYLON.MeshBuilder.CreateBox("road_east_west", { width: 640, depth: 18, height: 0.3 }, scene);
