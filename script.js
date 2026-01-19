@@ -4,6 +4,7 @@ const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, s
 const createScene = () => {
     const scene = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.75, 0.9, 1.0, 1.0);
+    scene.collisionsEnabled = true;
 
     // Camera (simple orbit camera to inspect the scene)
     const camera = new BABYLON.ArcRotateCamera(
@@ -20,9 +21,12 @@ const createScene = () => {
     // Create person-perspective camera (will be positioned later after person is created)
     const personCamera = new BABYLON.UniversalCamera("personCamera", new BABYLON.Vector3(0, 5, -10), scene);
     personCamera.wheelDeltaPercentage = 0.01;
+    personCamera.minZ = 0.1; // Prevent near-plane clipping
 
     // Camera toggle state
     let isPersonView = false;
+    let lookPitch = 0;
+    const keysPressed = {};
 
     // Light
     const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0, 1, 0), scene);
@@ -52,6 +56,9 @@ const createScene = () => {
 
     const schoolMat = new BABYLON.StandardMaterial("schoolMat", scene);
     schoolMat.diffuseColor = new BABYLON.Color3(0.75, 0.72, 0.68);
+
+    const entranceMat = new BABYLON.StandardMaterial("entranceMat", scene);
+    entranceMat.diffuseColor = new BABYLON.Color3(0.65, 0.50, 0.35); // Lighter brown
 
     const libraryMat = new BABYLON.StandardMaterial("libraryMat", scene);
     libraryMat.diffuseColor = new BABYLON.Color3(0.68, 0.72, 0.78);
@@ -168,6 +175,11 @@ const createScene = () => {
     const person = BABYLON.Mesh.MergeMeshes([head, body, leftArm, rightArm, leftLeg, rightLeg], true, true, undefined, false, true);
     person.position.set(0, 0, 0);
 
+    // Collision properties for the person - Taller/Wider bubble to prevent clipping
+    person.checkCollisions = true;
+    person.ellipsoid = new BABYLON.Vector3(1.2, 1.8, 1.2);
+    person.ellipsoidOffset = new BABYLON.Vector3(0, 1.8, 0);
+
     // Make person clickable - changes color
     person.actionManager = new BABYLON.ActionManager(scene);
     person.actionManager.registerAction(
@@ -179,62 +191,31 @@ const createScene = () => {
         )
     );
 
-    // Keyboard controls - movement relative to the active view
-    const personSpeed = 1.0;
-    const rotationSpeed = 0.05;
-    const cameraSpeed = 1.5;
+    // Keyboard controls - movement state tracking
+    const personSpeed = 0.2; // Adjusted for frame-based movement
+    const rotationSpeed = 0.03;
+    const cameraSpeed = 1.0;
 
     scene.onKeyboardObservable.add((kbInfo) => {
-        if (kbInfo.type !== BABYLON.KeyboardEventTypes.KEYDOWN) return;
-
         const key = kbInfo.event.key.toLowerCase();
+        if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYDOWN) {
+            keysPressed[key] = true;
+        } else if (kbInfo.type === BABYLON.KeyboardEventTypes.KEYUP) {
+            keysPressed[key] = false;
+        }
+    });
 
-        if (isPersonView) {
-            // --- First Person / Perspective Controls ---
-            switch (key) {
-                case "w":
-                    // Move forward in the direction person is facing
-                    person.position.x += Math.sin(person.rotation.y) * personSpeed;
-                    person.position.z += Math.cos(person.rotation.y) * personSpeed;
-                    break;
-                case "s":
-                    // Move backward
-                    person.position.x -= Math.sin(person.rotation.y) * personSpeed;
-                    person.position.z -= Math.cos(person.rotation.y) * personSpeed;
-                    break;
-                case "a":
-                    // Rotate left
-                    person.rotation.y -= rotationSpeed;
-                    break;
-                case "d":
-                    // Rotate right
-                    person.rotation.y += rotationSpeed;
-                    break;
-            }
-        } else {
-            // --- Overview Camera Panning (WASD relative to viewer) ---
-            // Get camera's forward and right vectors relative to the ground plane (XZ)
-            const forward = camera.getDirection(BABYLON.Axis.Z);
-            forward.y = 0;
-            forward.normalize();
-
-            const right = camera.getDirection(BABYLON.Axis.X);
-            right.y = 0;
-            right.normalize();
-
-            switch (key) {
-                case "w":
-                    camera.target.addInPlace(forward.scale(cameraSpeed));
-                    break;
-                case "s":
-                    camera.target.subtractInPlace(forward.scale(cameraSpeed));
-                    break;
-                case "a":
-                    camera.target.subtractInPlace(right.scale(cameraSpeed));
-                    break;
-                case "d":
-                    camera.target.addInPlace(right.scale(cameraSpeed));
-                    break;
+    // --- Middle Mouse Look Handling ---
+    scene.onPointerObservable.add((pointerInfo) => {
+        if (isPersonView && pointerInfo.type === BABYLON.PointerEventTypes.POINTERMOVE) {
+            const event = pointerInfo.event;
+            // buttons mask 4 is the middle button
+            if (event.buttons & 4) {
+                // Rotate person body with horizontal mouse move
+                person.rotation.y += event.movementX * 0.005;
+                // Rotate view up/down with vertical mouse move
+                lookPitch += event.movementY * 0.005;
+                lookPitch = Math.max(-1.4, Math.min(1.4, lookPitch));
             }
         }
     });
@@ -248,114 +229,241 @@ const createScene = () => {
             if (isPersonView) {
                 // Switch to person perspective
                 scene.activeCamera = personCamera;
-                personCamera.attachControl(canvas, true);
+                // We handle our own inputs for person mode
                 camera.detachControl();
             } else {
                 // Switch back to overview
                 scene.activeCamera = camera;
                 camera.attachControl(canvas, true);
-                personCamera.detachControl();
             }
         }
     });
 
-    // Update person camera position to follow person (third-person view)
+    // Update loop for movement and camera - Handle simultaneous key presses
     scene.registerBeforeRender(() => {
-        if (isPersonView && person) {
-            // Position camera behind and above the person
-            const distance = 8;
-            const height = 6;
-            personCamera.position.x = person.position.x - Math.sin(person.rotation.y) * distance;
-            personCamera.position.y = person.position.y + height;
-            personCamera.position.z = person.position.z - Math.cos(person.rotation.y) * distance;
+        const speedMultiplier = keysPressed["shift"] ? 3.0 : 1.0;
 
-            // Look at the person
-            personCamera.setTarget(new BABYLON.Vector3(
-                person.position.x + Math.sin(person.rotation.y) * 2,
-                person.position.y + 3,
-                person.position.z + Math.cos(person.rotation.y) * 2
-            ));
+        if (isPersonView) {
+            if (person) {
+                // First Person Movement with Collisions
+                const currentPersonSpeed = personSpeed * speedMultiplier;
+                let moveVector = new BABYLON.Vector3(0, 0, 0);
+
+                if (keysPressed["w"]) {
+                    moveVector.x += Math.sin(person.rotation.y) * currentPersonSpeed;
+                    moveVector.z += Math.cos(person.rotation.y) * currentPersonSpeed;
+                }
+                if (keysPressed["s"]) {
+                    moveVector.x -= Math.sin(person.rotation.y) * currentPersonSpeed;
+                    moveVector.z -= Math.cos(person.rotation.y) * currentPersonSpeed;
+                }
+
+                if (moveVector.length() > 0) {
+                    person.moveWithCollisions(moveVector);
+                }
+
+                if (keysPressed["a"]) {
+                    person.rotation.y -= rotationSpeed;
+                }
+                if (keysPressed["d"]) {
+                    person.rotation.y += rotationSpeed;
+                }
+
+                // Position camera at head level (scaled height)
+                const eyeHeight = 3.3;
+                personCamera.position.copyFrom(person.position);
+                personCamera.position.y += eyeHeight;
+
+                // Minimal offset forward to prevent seeing back of head but staying within the collision bubble
+                personCamera.position.x += Math.sin(person.rotation.y) * 0.2;
+                personCamera.position.z += Math.cos(person.rotation.y) * 0.2;
+
+                personCamera.rotation.y = person.rotation.y;
+                personCamera.rotation.x = lookPitch;
+            }
+        } else {
+            // Overview Camera Panning
+            const currentCameraSpeed = cameraSpeed * speedMultiplier;
+            const forward = camera.getDirection(BABYLON.Axis.Z);
+            forward.y = 0;
+            forward.normalize();
+            const right = camera.getDirection(BABYLON.Axis.X);
+            right.y = 0;
+            right.normalize();
+
+            if (keysPressed["w"]) camera.target.addInPlace(forward.scale(currentCameraSpeed));
+            if (keysPressed["s"]) camera.target.subtractInPlace(forward.scale(currentCameraSpeed));
+            if (keysPressed["a"]) camera.target.subtractInPlace(right.scale(currentCameraSpeed));
+            if (keysPressed["d"]) camera.target.addInPlace(right.scale(currentCameraSpeed));
         }
     });
 
-    // --- School grounds + big school building (corner: NW) ---
-    // Grounds (a fenced/outlined yard) - Extended westward with doubled width
+    // --- School grounds + hollow school building (corner: NW) ---
+    const wallThickness = 1.0;
+    const schoolHeight = 36;
+    const schoolWidth = 322; // length along X
+    const schoolDepth = 56;  // depth along Z
+    const centerX = -194;
+    const centerZ = 110;
+
+    // Grounds
     const schoolGround = BABYLON.MeshBuilder.CreateBox("schoolGround", { width: 343, depth: 160, height: 0.08 }, scene);
-    schoolGround.position.set(-194, 0.04, 110);
+    schoolGround.position.set(centerX, 0.04, centerZ);
     const schoolGroundMat = new BABYLON.StandardMaterial("schoolGroundMat", scene);
     schoolGroundMat.diffuseColor = new BABYLON.Color3(0.20, 0.48, 0.22);
-    schoolGroundMat.specularColor = new BABYLON.Color3(0.02, 0.02, 0.02);
     schoolGround.material = schoolGroundMat;
+    schoolGround.checkCollisions = true;
 
-    // Big school building - 70% of previous length, 6 floors tall, doubled width
-    const school = BABYLON.MeshBuilder.CreateBox("schoolBuilding", { width: 322, depth: 56, height: 36 }, scene);
-    school.position.set(-194, 18, 110);
-    school.material = schoolMat;
+    // A helper for walls
+    const createWall = (name, w, h, d, x, y, z, mat = schoolMat) => {
+        const wall = BABYLON.MeshBuilder.CreateBox(name, { width: w, height: h, depth: d }, scene);
+        wall.position.set(x, y, z);
+        wall.material = mat;
+        wall.checkCollisions = true;
+        return wall;
+    };
 
-    // School roof
-    const schoolRoof = BABYLON.MeshBuilder.CreateBox("schoolRoof", { width: 326, depth: 64, height: 2.2 }, scene);
-    schoolRoof.position.set(-194, 37.1, 110);
-    schoolRoof.material = roofMat;
+    // Main Building Walls
+    // North Wall (Split to create openings for the three northern wings)
+    const doorW = 14;
+    const doorH = 12;
+    const hH = schoolHeight - doorH;
 
-    // School wings to create E-shape from above
-    // North wing (center) - extended to 3x size, height reduced to half
-    const schoolWingNorth = BABYLON.MeshBuilder.CreateBox("schoolWingNorth", { width: 150, depth: 105, height: 27 }, scene);
-    schoolWingNorth.position.set(-194, 13.5, 190);
-    schoolWingNorth.material = schoolMat;
+    // NW Wing Opening (at centerX - 136)
+    createWall("school_n_seg1", 18, schoolHeight, wallThickness, centerX - 152, schoolHeight / 2, centerZ + schoolDepth / 2);
+    createWall("school_n_door1_h", doorW, hH, wallThickness, centerX - 136, doorH + hH / 2, centerZ + schoolDepth / 2);
 
-    const schoolWingNorthRoof = BABYLON.MeshBuilder.CreateBox("schoolWingNorthRoof", { width: 154, depth: 109, height: 2.2 }, scene);
-    schoolWingNorthRoof.position.set(-194, 28.1, 190);
-    schoolWingNorthRoof.material = roofMat;
+    // Gap between NW and Center
+    createWall("school_n_seg2", 122, schoolHeight, wallThickness, centerX - 68, schoolHeight / 2, centerZ + schoolDepth / 2);
 
-    // South wing
-    const schoolWingSouth = BABYLON.MeshBuilder.CreateBox("schoolWingSouth", { width: 50, depth: 35, height: 18 }, scene);
-    schoolWingSouth.position.set(-194, 9, 65);
-    schoolWingSouth.material = schoolMat;
+    // Center Wing Opening (at centerX)
+    createWall("school_n_door2_h", doorW, hH, wallThickness, centerX, doorH + hH / 2, centerZ + schoolDepth / 2);
 
-    const schoolWingSouthRoof = BABYLON.MeshBuilder.CreateBox("schoolWingSouthRoof", { width: 54, depth: 39, height: 2.2 }, scene);
-    schoolWingSouthRoof.position.set(-194, 19.1, 65);
-    schoolWingSouthRoof.material = roofMat;
+    // Gap between Center and NE
+    createWall("school_n_seg3", 122, schoolHeight, wallThickness, centerX + 68, schoolHeight / 2, centerZ + schoolDepth / 2);
 
-    // North side wings - West end (extended north 4x, 30% taller)
-    const schoolWingNorthWest = BABYLON.MeshBuilder.CreateBox("schoolWingNorthWest", { width: 50, depth: 175, height: 23.4 }, scene);
-    schoolWingNorthWest.position.set(-330, 11.7, 225);
-    schoolWingNorthWest.material = schoolMat;
+    // NE Wing Opening (at centerX + 136)
+    createWall("school_n_door3_h", doorW, hH, wallThickness, centerX + 136, doorH + hH / 2, centerZ + schoolDepth / 2);
+    createWall("school_n_seg4", 18, schoolHeight, wallThickness, centerX + 152, schoolHeight / 2, centerZ + schoolDepth / 2);
 
-    const schoolWingNorthWestRoof = BABYLON.MeshBuilder.CreateBox("schoolWingNorthWestRoof", { width: 54, depth: 179, height: 2.2 }, scene);
-    schoolWingNorthWestRoof.position.set(-330, 24.5, 225);
-    schoolWingNorthWestRoof.material = roofMat;
+    // East Wall
+    createWall("school_east_wall", wallThickness, schoolHeight, schoolDepth, centerX + schoolWidth / 2, schoolHeight / 2, centerZ);
+    // West Wall
+    createWall("school_west_wall", wallThickness, schoolHeight, schoolDepth, centerX - schoolWidth / 2, schoolHeight / 2, centerZ);
+    // South Wall (Split to allow entrance from the South Wing)
+    const buildingDoorWidth = 14;
+    const buildingDoorHeight = 12;
+    const buildingHeaderHeight = schoolHeight - buildingDoorHeight;
+    const buildingSideWallWidth = (schoolWidth - buildingDoorWidth) / 2;
+    createWall("school_south_wall_L", buildingSideWallWidth, schoolHeight, wallThickness, centerX - buildingDoorWidth / 2 - buildingSideWallWidth / 2, schoolHeight / 2, centerZ - schoolDepth / 2);
+    createWall("school_south_wall_R", buildingSideWallWidth, schoolHeight, wallThickness, centerX + buildingDoorWidth / 2 + buildingSideWallWidth / 2, schoolHeight / 2, centerZ - schoolDepth / 2);
+    // Header reaches the roof correctly (from 12 up to 36)
+    createWall("school_south_wall_H", buildingDoorWidth, buildingHeaderHeight, wallThickness, centerX, buildingDoorHeight + buildingHeaderHeight / 2, centerZ - schoolDepth / 2);
 
-    // North side wings - East end (extended north 4x, 30% taller)
-    const schoolWingNorthEast = BABYLON.MeshBuilder.CreateBox("schoolWingNorthEast", { width: 50, depth: 175, height: 23.4 }, scene);
-    schoolWingNorthEast.position.set(-58, 11.7, 225);
-    schoolWingNorthEast.material = schoolMat;
+    // School floor inside
+    const schoolFloor = BABYLON.MeshBuilder.CreateBox("schoolFloor", { width: schoolWidth, height: 0.1, depth: schoolDepth }, scene);
+    schoolFloor.position.set(centerX, 0.05, centerZ);
+    schoolFloor.material = sidewalkMat;
+    schoolFloor.checkCollisions = true;
 
-    const schoolWingNorthEastRoof = BABYLON.MeshBuilder.CreateBox("schoolWingNorthEastRoof", { width: 54, depth: 179, height: 2.2 }, scene);
-    schoolWingNorthEastRoof.position.set(-58, 24.5, 225);
-    schoolWingNorthEastRoof.material = roofMat;
+    // --- Wings (Hollow) ---
+    const makeHollowWing = (name, w, h, d, x, z, northMode, southMode) => {
+        const dWidth = 14;
+        const sw = (w - dWidth) / 2;
+        const openHeight = 12;
+        const headerHeight = h - openHeight;
 
-    // Main entrance block - centered on south side
-    const schoolEntrance = BABYLON.MeshBuilder.CreateBox("schoolEntrance", { width: 30, depth: 12, height: 28.8 }, scene);
-    schoolEntrance.position.set(-194, 14.4, 77);
-    schoolEntrance.material = schoolMat;
+        // North wall
+        if (northMode === "door") {
+            createWall(name + "_n_l", sw, h, wallThickness, x - dWidth / 2 - sw / 2, h / 2, z + d / 2);
+            createWall(name + "_n_r", sw, h, wallThickness, x + dWidth / 2 + sw / 2, h / 2, z + d / 2);
+            createWall(name + "_n_h", dWidth, headerHeight, wallThickness, x, openHeight + headerHeight / 2, z + d / 2);
+        } else if (northMode === "solid") {
+            createWall(name + "_n", w, h, wallThickness, x, h / 2, z + d / 2);
+        }
+
+        // South wall
+        if (southMode === "door") {
+            createWall(name + "_s_l", sw, h, wallThickness, x - dWidth / 2 - sw / 2, h / 2, z - d / 2);
+            createWall(name + "_s_r", sw, h, wallThickness, x + dWidth / 2 + sw / 2, h / 2, z - d / 2);
+            createWall(name + "_s_h", dWidth, headerHeight, wallThickness, x, openHeight + headerHeight / 2, z - d / 2);
+        } else if (southMode === "solid") {
+            createWall(name + "_s", w, h, wallThickness, x, h / 2, z - d / 2);
+        }
+
+        // East wall
+        createWall(name + "_e", wallThickness, h, d, x + w / 2, h / 2, z);
+        // West wall
+        createWall(name + "_w", wallThickness, h, d, x - w / 2, h / 2, z);
+        // Floor
+        const f = BABYLON.MeshBuilder.CreateBox(name + "_f", { width: w, height: 0.1, depth: d }, scene);
+        f.position.set(x, 0.05, z);
+        f.material = sidewalkMat;
+        f.checkCollisions = true;
+    };
+
+    // Center North Wing
+    makeHollowWing("wing_center", 150, 27, 105, centerX, centerZ + 105 / 2 + schoolDepth / 2, "solid", "open");
+    // South side wing (Entrance Wing - now has doors on both South and North sides)
+    makeHollowWing("wing_south", 50, 18, 35, centerX, centerZ - 35 / 2 - schoolDepth / 2, "door", "door");
+    // North-West Wing
+    makeHollowWing("wing_nw", 50, 23.4, 175, centerX - 136, centerZ + 175 / 2 + schoolDepth / 2, "solid", "open");
+    // North-East Wing
+    makeHollowWing("wing_ne", 50, 23.4, 175, centerX + 136, centerZ + 175 / 2 + schoolDepth / 2, "solid", "open");
+
+    // Roofs
+    const createRoof = (name, w, d, x, y, z) => {
+        const r = BABYLON.MeshBuilder.CreateBox(name, { width: w, depth: d, height: 2.2 }, scene);
+        r.position.set(x, y, z);
+        r.material = roofMat;
+        return r;
+    };
+    createRoof("main_roof", schoolWidth + 4, schoolDepth + 4, centerX, 37.1, centerZ);
+    createRoof("center_wing_roof", 154, 109, centerX, 28.1, 190);
+    createRoof("south_wing_roof", 54, 39, centerX, 19.1, 65);
+    createRoof("nw_wing_roof", 54, 179, centerX - 136, 24.5, 225);
+    createRoof("ne_wing_roof", 54, 179, centerX + 136, 24.5, 225);
+
+    // Foyer structure (taller decorative entrance)
+    const entranceHeight = 28.8;
+    const entranceCenterX = centerX;
+    const entranceCenterZ = centerZ - schoolDepth / 2 - 6;
+    const foyerDepth = 12;
+    const foyerDoorWidth = 14;
+    const foyerDoorHeight = 12;
+    const foyerSideWidth = (30 - foyerDoorWidth) / 2;
+    const foyerHeaderH = entranceHeight - foyerDoorHeight;
+
+    // Side walls
+    createWall("foyer_e", wallThickness, entranceHeight, foyerDepth, entranceCenterX + 15, entranceHeight / 2, entranceCenterZ, entranceMat);
+    createWall("foyer_w", wallThickness, entranceHeight, foyerDepth, entranceCenterX - 15, entranceHeight / 2, entranceCenterZ, entranceMat);
+
+    // South wall (with door)
+    createWall("foyer_s_l", foyerSideWidth, entranceHeight, wallThickness, entranceCenterX - foyerDoorWidth / 2 - foyerSideWidth / 2, entranceHeight / 2, entranceCenterZ - foyerDepth / 2, entranceMat);
+    createWall("foyer_s_r", foyerSideWidth, entranceHeight, wallThickness, entranceCenterX + foyerDoorWidth / 2 + foyerSideWidth / 2, entranceHeight / 2, entranceCenterZ - foyerDepth / 2, entranceMat);
+    createWall("foyer_s_h", foyerDoorWidth, foyerHeaderH, wallThickness, entranceCenterX, foyerDoorHeight + foyerHeaderH / 2, entranceCenterZ - foyerDepth / 2, entranceMat);
+
+    const foyerRoof = BABYLON.MeshBuilder.CreateBox("foyer_roof", { width: 30, depth: foyerDepth, height: 1 }, scene);
+    foyerRoof.position.set(entranceCenterX, entranceHeight, entranceCenterZ);
+    foyerRoof.material = entranceMat;
+    foyerRoof.checkCollisions = true;
 
     // Crucifix on top of entrance
-    // Vertical post
     const crucifixVertical = BABYLON.MeshBuilder.CreateBox("crucifixVertical", { width: 2, depth: 2, height: 28.8 }, scene);
-    crucifixVertical.position.set(-194, 43.2, 77);
+    crucifixVertical.position.set(centerX, 43.2, centerZ - schoolDepth / 2 - 6);
     const crucifixMat = new BABYLON.StandardMaterial("crucifixMat", scene);
     crucifixMat.diffuseColor = new BABYLON.Color3(0.85, 0.85, 0.85);
     crucifixVertical.material = crucifixMat;
 
-    // Horizontal crossbar
     const crucifixHorizontal = BABYLON.MeshBuilder.CreateBox("crucifixHorizontal", { width: 15, depth: 2, height: 2 }, scene);
-    crucifixHorizontal.position.set(-194, 48, 77);
+    crucifixHorizontal.position.set(centerX, 48, centerZ - schoolDepth / 2 - 6);
     crucifixHorizontal.material = crucifixMat;
 
     // Walkway from sidewalk to entrance
-    const schoolPath = BABYLON.MeshBuilder.CreateBox("schoolPath", { width: 12, depth: 50, height: 0.08 }, scene);
-    schoolPath.position.set(-194, 0.05, 52);
+    const schoolPath = BABYLON.MeshBuilder.CreateBox("schoolPath", { width: 12, depth: 30, height: 0.08 }, scene);
+    schoolPath.position.set(centerX, 0.05, 32);
     schoolPath.material = parkPathMat;
+    schoolPath.checkCollisions = true;
 
     // --- Park (corner: SW - Swapped with Shops) ---
     const park = BABYLON.MeshBuilder.CreateBox("parkGround", { width: 322, depth: 80, height: 0.08 }, scene);
