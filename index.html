@@ -28,6 +28,7 @@
             padding: 10px 12px;
             background: rgba(0, 0, 0, 0.55);
             color: #fff;
+            z-index: 9999;
             font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial;
             border-radius: 10px;
             user-select: none;
@@ -53,25 +54,11 @@
 
     <script src="script.js"></script>
 
-    <div id="visitorCounter" class="hud" style="left:12px; top:70px;">
-        Visitors: <span id="visitorCount">...</span>
+    <div id="visitorCounter" class="hud" style="left:12px; top:70px; z-index:9999;">
+        <a href='http://www.freevisitorcounters.com' style="color:#fff; text-decoration:none;">free visitor counters</a>
+        <script type='text/javascript' src='https://www.freevisitorcounters.com/auth.php?id=3c8f8c76aa22938be9b4553c1576941a3bb47d50'></script>
+        <script type="text/javascript" src="https://www.freevisitorcounters.com/en/home/counter/1493768/t/0"></script>
     </div>
-
-    <script>
-        (function () {
-            const el = document.getElementById('visitorCount');
-            // Use CountAPI for a lightweight, CORS-friendly counter
-            fetch('https://api.countapi.xyz/hit/3D_Molloy/visitors')
-                .then(res => res.json())
-                .then(data => {
-                    if (el && data && typeof data.value !== 'undefined') el.textContent = data.value;
-                })
-                .catch(err => {
-                    if (el) el.textContent = 'N/A';
-                    console.error('Visitor counter error:', err);
-                });
-        })();
-    </script>
 </body>
 
 </html>
