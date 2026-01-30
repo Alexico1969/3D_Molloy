@@ -52,8 +52,26 @@
     <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
     <script src="script.js"></script>
-     <a href='http://www.freevisitorcounters.com'>freevisitorcounters's Website</a> <script type='text/javascript' src='https://www.freevisitorcounters.com/auth.php?id=62b6ff5dc2c2a63b9618a7a9d7636824db827da6'></script>
-<script type="text/javascript" src="https://www.freevisitorcounters.com/en/home/counter/1493748/t/0"></script>
+
+    <div id="visitorCounter" class="hud" style="left:12px; top:70px;">
+        Visitors: <span id="visitorCount">...</span>
+    </div>
+
+    <script>
+        (function () {
+            const el = document.getElementById('visitorCount');
+            // Use CountAPI for a lightweight, CORS-friendly counter
+            fetch('https://api.countapi.xyz/hit/3D_Molloy/visitors')
+                .then(res => res.json())
+                .then(data => {
+                    if (el && data && typeof data.value !== 'undefined') el.textContent = data.value;
+                })
+                .catch(err => {
+                    if (el) el.textContent = 'N/A';
+                    console.error('Visitor counter error:', err);
+                });
+        })();
+    </script>
 </body>
 
 </html>
